@@ -211,6 +211,39 @@ Running build in Washington, D.C., USA (East) - iad1
 
 一般建议保持 `iad1`。如果你的主要调用方在亚洲，可以在 Vercel 后台查看账号是否支持更近的区域；但上游 Codebuff / Freebuff 的网络连通性比访问者到 Vercel 的距离更关键。
 
+### 绑定自定义域名
+
+Vercel 默认会分配一个 `*.vercel.app` 域名。如果你有自己的域名，可以在 Vercel 后台绑定。
+
+操作流程：
+
+1. 打开 Vercel 项目页面。
+2. 进入 `Settings` -> `Domains`。
+3. 在输入框填写你的域名，例如 `api.example.com` 或 `example.com`。
+4. 点击 `Add`。
+5. 按 Vercel 页面提示，到你的域名服务商后台添加 DNS 记录。
+6. 回到 Vercel 等待校验通过，状态变成 `Valid Configuration` 后即可访问。
+
+常见 DNS 配置：
+
+| 使用方式 | DNS 类型 | 主机记录 | 记录值 |
+| --- | --- | --- | --- |
+| 子域名，例如 `api.example.com` | `CNAME` | `api` | `cname.vercel-dns.com` |
+| 根域名，例如 `example.com` | `A` | `@` | `76.76.21.21` |
+| `www.example.com` | `CNAME` | `www` | `cname.vercel-dns.com` |
+
+不同域名服务商的字段名称可能不一样。`主机记录` 也可能叫 `Name`、`Host` 或 `Record Name`；`记录值` 也可能叫 `Value`、`Target` 或 `Points to`。
+
+DNS 生效后，Vercel 会自动签发 HTTPS 证书。一般几分钟内完成，少数域名服务商可能需要更久。
+
+绑定后调用接口时，把示例里的 Vercel 域名换成你的自定义域名即可：
+
+```text
+https://api.example.com/v1/chat/completions
+```
+
+如果你同时绑定了根域名和 `www` 域名，可以在 `Settings` -> `Domains` 里设置其中一个作为主域名，另一个自动跳转过去。API 服务通常更推荐使用单独子域名，例如 `api.example.com`。
+
 ### 更新 Token 或环境变量
 
 如果只是修改了 Vercel 后台的 `FREEBUFF_TOKEN`、`FREEBUFF_API_KEY` 等环境变量，需要在 Vercel 的 `Deployments` 页面点击 `Redeploy`，让新环境变量进入新的部署。
