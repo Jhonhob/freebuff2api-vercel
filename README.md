@@ -358,4 +358,6 @@ FREEBUFF_LOG_BODY_CHARS=0
 
 ## 感谢
 
+> 本项目基于 [XxxXTeam/freebuff2api](https://github.com/XxxXTeam/freebuff2api) 修改。
+
 > [FreeBuff](https://freebuff.com)
