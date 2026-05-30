@@ -31,6 +31,7 @@ class BufferedLogRecord:
     level: str
     logger: str
     message: str
+    detail: str = ""
 
 
 class InMemoryLogHandler(logging.Handler):
@@ -43,12 +44,16 @@ class InMemoryLogHandler(logging.Handler):
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
+            detail = ""
+            if record.exc_info:
+                detail = self.formatException(record.exc_info)
             item = BufferedLogRecord(
                 id=next(self._counter),
                 time=self.formatTime(record),
                 level=record.levelname,
                 logger=record.name,
                 message=record.getMessage(),
+                detail=detail,
             )
             with self._lock:
                 self._records.append(item)

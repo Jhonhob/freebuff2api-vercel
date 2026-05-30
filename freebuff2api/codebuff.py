@@ -186,6 +186,7 @@ class CodebuffClient:
         )
 
     async def create_session(self, model: str) -> FreebuffSession:
+        logger.info("create freebuff session requested model=%s", model)
         data = await self._json(
             "POST",
             "/api/v1/freebuff/session",
@@ -678,11 +679,29 @@ class CodebuffAccountPool:
     ) -> CodebuffAccountLease:
         account_index = await self._reserve_account()
         account = self._accounts[account_index]
+        logger.info(
+            "account reserved index=%s session_model=%s messages=%s",
+            account_index + 1,
+            model,
+            len(messages or []),
+        )
         try:
             session_lease = await account.sessions.acquire_session(model, messages)
         except Exception:
+            logger.exception(
+                "account session acquire failed index=%s session_model=%s",
+                account_index + 1,
+                model,
+            )
             await self.release(account_index)
             raise
+        logger.info(
+            "account session acquired index=%s session_model=%s instance_id=%s remaining_ms=%s",
+            account_index + 1,
+            session_lease.session.model,
+            session_lease.session.instance_id,
+            session_lease.session.remaining_ms,
+        )
         return CodebuffAccountLease(
             client=account.client,
             session=session_lease.session,
@@ -767,7 +786,8 @@ def _upstream_error(
             upstream_message = data.get("message") or text
             return CodebuffError(
                 "Codebuff 409 session_model_mismatch: "
-                f"{upstream_message} 当前 IP/区域受限；请换用 US 服务器或 US 出口 IP 后重试。",
+                f"{upstream_message} 上游判定当前账号或服务器出口只允许 DeepSeek V4 Flash；"
+                "即使公网定位显示 US，也可能因出口 IP 段、账号状态或上游限免策略无法使用 Pro。",
                 409,
             )
 

@@ -213,7 +213,9 @@
       font-size: 12px;
       line-height: 1.65;
     }
-    .log-line { display: grid; grid-template-columns: 148px 70px 220px minmax(0, 1fr); gap: 10px; border-bottom: 1px solid rgba(255,255,255,.06); padding: 3px 0; }
+    .log-line { display: grid; grid-template-columns: 148px 70px 220px minmax(0, 1fr); gap: 10px; border-bottom: 1px solid rgba(255,255,255,.06); padding: 6px 0; }
+    .log-message { white-space: pre-wrap; word-break: break-word; }
+    .log-detail { grid-column: 1 / -1; margin: 4px 0 2px; padding: 8px 10px; border-left: 2px solid #38bdf8; background: rgba(15, 23, 42, .88); color: #cbd5e1; white-space: pre-wrap; word-break: break-word; }
     .log-level-WARNING { color: #fbbf24; }
     .log-level-ERROR, .log-level-CRITICAL { color: #fb7185; }
     .log-level-DEBUG { color: #67e8f9; }
@@ -381,7 +383,7 @@
                     <span class="muted">{{ token.length }} chars</span>
                     <span class="token-actions">
                       <n-button size="small" secondary :loading="loading.tokenRead === token.index" @click="openTokenModal('edit', token.index)">修改</n-button>
-                      <n-button size="small" secondary :loading="loading.verify === token.index" @click="verifySavedToken(token.index)">测试</n-button>
+                      <n-button size="small" secondary :loading="loading.verify === token.index" @click="verifySavedToken(token.index)">验证</n-button>
                       <n-popconfirm @positive-click="deleteToken(token.index)">
                         <template #trigger>
                           <n-button size="small" tertiary type="error" :loading="loading.tokenDelete === token.index">删除</n-button>
@@ -493,13 +495,14 @@
                   <span>{{ line.time }}</span>
                   <span :class="'log-level-' + line.level">{{ line.level }}</span>
                   <span>{{ line.logger }}</span>
-                  <span>{{ line.message }}</span>
+                  <span class="log-message">{{ line.message }}</span>
+                  <pre v-if="line.detail" class="log-detail">{{ line.detail }}</pre>
                 </div>
               </div>
             </section>
 
             <section v-if="tab === 'test'" class="panel-grid">
-              <n-card title="模型测试" :bordered="true">
+              <n-card title="模型调用" :bordered="true">
                 <n-form>
                   <n-form-item label="模型 ID">
                     <n-select v-model:value="testForm.model" :options="modelOptions" :loading="loading.models" filterable placeholder="从 /v1/models 获取模型" />
@@ -508,13 +511,13 @@
                     <n-input v-model:value="testForm.prompt" type="textarea" :autosize="{ minRows: 4, maxRows: 8 }" />
                   </n-form-item>
                   <n-space>
-                    <n-button type="primary" :loading="loading.test" @click="runChatTest">运行测试</n-button>
+                    <n-button type="primary" :loading="loading.test" @click="runChatTest">发送请求</n-button>
                     <n-button secondary :loading="loading.models" @click="loadModels">刷新模型</n-button>
                   </n-space>
                 </n-form>
               </n-card>
-              <n-card title="测试结果" :bordered="true">
-                <pre class="env-box">{{ testResult || '尚未运行测试' }}</pre>
+              <n-card title="调用结果" :bordered="true">
+                <pre class="env-box">{{ testResult || '尚未发送请求' }}</pre>
               </n-card>
             </section>
 
@@ -544,7 +547,7 @@
                 </n-form-item>
                 <n-space>
                   <n-button type="primary" :loading="loading.tokens" @click="saveTokenModal">保存并生效</n-button>
-                  <n-button secondary :disabled="!tokenModal.token" :loading="loading.verify === 0" @click="verifyTokenValue(tokenModal.token)">测试当前输入</n-button>
+                  <n-button secondary :disabled="!tokenModal.token" :loading="loading.verify === 0" @click="verifyTokenValue(tokenModal.token)">验证当前输入</n-button>
                 </n-space>
               </n-form>
             </n-modal>
@@ -595,7 +598,7 @@
         const lastEnv = ref('');
         const testResult = ref('');
         const modelOptions = ref([]);
-        const testForm = reactive({ model: '', prompt: '用一句话回复：服务测试成功。' });
+        const testForm = reactive({ model: '', prompt: '请用一句话回复当前服务状态。' });
         const tokenHelpUrl = 'https://freebuff.071129.xyz/';
         const tokenModal = reactive({ show: false, mode: 'add', index: null, token: '' });
         const apiKeyForm = reactive({ api_key: '' });
@@ -623,7 +626,7 @@
           { key: 'env', label: 'Env', subtitle: '查看本地 .env 内容和部署环境提示' },
           { key: 'network', label: '网络', subtitle: '检测当前服务器公网地区、代理和上游连通性' },
           { key: 'logs', label: '日志', subtitle: '查看当前实例内存中的运行日志' },
-          { key: 'test', label: '测试', subtitle: '快速发起一次模型调用测试' },
+          { key: 'test', label: '测试', subtitle: '快速发起一次模型调用' },
           { key: 'settings', label: '设置', subtitle: '修改后台管理员 Key' }
         ];
         if (!nav.some(item => item.key === tab.value)) tab.value = 'overview';
@@ -908,7 +911,10 @@
         }
 
         async function copyLogs() {
-          const text = logs.value.map(item => `${item.time} ${item.level} [${item.logger}] ${item.message}`).join('\n');
+          const text = logs.value.map(item => {
+            const line = `${item.time} ${item.level} [${item.logger}] ${item.message}`;
+            return item.detail ? `${line}\n${item.detail}` : line;
+          }).join('\n');
           await navigator.clipboard.writeText(text);
           message.success('日志已复制');
         }
