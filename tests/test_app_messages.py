@@ -136,7 +136,9 @@ class AnthropicMessagesEndpointTests(unittest.TestCase):
                 )
 
         self.assertEqual(response.status_code, 400)
-        self.assertIn("max_tokens", response.json()["detail"].lower())
+        body = response.json()
+        self.assertEqual(body.get("type"), "error")
+        self.assertIn("max_tokens", body["error"]["message"].lower())
 
     def test_messages_empty_messages(self) -> None:
         with patch.dict(
@@ -174,7 +176,9 @@ class AnthropicMessagesEndpointTests(unittest.TestCase):
                 )
 
         self.assertEqual(response.status_code, 400)
-        self.assertIn("messages", response.json()["detail"].lower())
+        body = response.json()
+        self.assertEqual(body.get("type"), "error")
+        self.assertIn("messages", body["error"]["message"].lower())
 
     def test_messages_invalid_model(self) -> None:
         with patch.dict(

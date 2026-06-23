@@ -219,7 +219,13 @@ async def chat_completions(request: Request) -> Any:
         raise HTTPException(status_code=400, detail=str(error)) from error
     model = model_config.id
     if api_key and not api_key.allows_model(model):
-        raise HTTPException(status_code=403, detail=f"API key '{api_key.name}' not allowed to use model '{model}'")
+        return JSONResponse(
+            status_code=403,
+            content=anthropic_error_payload(
+                f"API key '{api_key.name}' not allowed to use model '{model}'",
+                error_type="permission_error",
+            ),
+        )
     logger.info(
         "chat completion request model=%s stream=%s messages=%s",
         model,
@@ -576,21 +582,30 @@ async def anthropic_messages(request: Request) -> Any:
     body = await request.json()
     settings = _settings(request)
 
-    # Validate required fields.
+    # Validate required fields — return Anthropic-compatible errors.
     if not isinstance(body.get("messages"), list):
-        raise HTTPException(
+        return JSONResponse(
             status_code=400,
-            detail="messages: field required (must be a non-empty list)",
+            content=anthropic_error_payload(
+                "messages: field required (must be a non-empty list)",
+                error_type="invalid_request_error",
+            ),
         )
     if not body.get("messages"):
-        raise HTTPException(
+        return JSONResponse(
             status_code=400,
-            detail="messages: must be a non-empty list",
+            content=anthropic_error_payload(
+                "messages: must be a non-empty list",
+                error_type="invalid_request_error",
+            ),
         )
     if body.get("max_tokens") is None:
-        raise HTTPException(
+        return JSONResponse(
             status_code=400,
-            detail="max_tokens: field required",
+            content=anthropic_error_payload(
+                "max_tokens: field required",
+                error_type="invalid_request_error",
+            ),
         )
 
     # Model resolution — preserve original model name for the response.
@@ -598,10 +613,19 @@ async def anthropic_messages(request: Request) -> Any:
     try:
         model_config = resolve_model(requested_model)
     except ValueError as error:
-        raise HTTPException(status_code=400, detail=str(error)) from error
+        return JSONResponse(
+            status_code=400,
+            content=anthropic_error_payload(str(error), error_type="invalid_request_error"),
+        )
     model = model_config.id
     if api_key and not api_key.allows_model(model):
-        raise HTTPException(status_code=403, detail=f"API key '{api_key.name}' not allowed to use model '{model}'")
+        return JSONResponse(
+            status_code=403,
+            content=anthropic_error_payload(
+                f"API key '{api_key.name}' not allowed to use model '{model}'",
+                error_type="permission_error",
+            ),
+        )
     stream = body.get("stream") is True
     logger.info(
         "anthropic messages request model=%s stream=%s messages=%s max_tokens=%s",
