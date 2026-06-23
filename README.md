@@ -6,6 +6,17 @@ Codebuff Freebuff 的 OpenAI-compatible API 适配服务。部署后可以像调
 
 ## 更新日志
 
+### 2026-06-23
+
+- **新增 Anthropic Messages API 兼容端点 `/v1/messages`**：支持 Claude 格式请求与响应，与现有 `/v1/chat/completions` 并存。
+- 实现 Anthropic 格式 ↔ OpenAI 格式全链路双向转换：消息标准化、`system` 顶层字段、`tool_use`/`tool_result` ↔ `tool_calls`/`tool` 双向映射、`input_schema` ↔ `function.parameters`。
+- 流式/非流式均完整支持。流式输出严格遵循 Anthropic SSE 事件规范：`message_start` → `content_block_start` → `content_block_delta` → `content_block_stop` → `message_delta` → `message_stop`。
+- Anthropic 鉴权使用 `x-api-key` header（与 OpenAI 的 `Authorization: Bearer` 并行），共用同一把 `FREEBUFF_API_KEY`。
+- 新增 Anthropic 模型别名：`claude-sonnet-4-20250514`、`claude-3.5-sonnet` 等自动映射到 Freebuff 模型。
+- 新增 `FREEBUFF_SYSTEM_PROMPT_OVERRIDE` 环境变量，可自定义或关闭上游系统提示注入。
+- 新增 `top_k` 参数支持（上游透传）；流式长连接每 15 s 发送 `event: ping` 心跳保活。
+- 新增 53 个测试用例（`tests/test_anthropic_compat.py` + `tests/test_app_messages.py`），回归全部 120 测试通过。
+
 ### 2026-06-10
 
 - 同步原始项目 `freebuff2api-main-oran` 的 Freebuff 上游兼容逻辑：HAR 风格请求头、固定上游 User-Agent、`Accept-Encoding` / `Connection` / `Host` 指纹、waiting-room 广告链路后的 `/api/v1/freebuff/streak` 调用。

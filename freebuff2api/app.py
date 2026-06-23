@@ -27,7 +27,21 @@ from .openai_compat import (
     normalize_chat_messages,
     sanitize_stream_chunk,
 )
-from .models import CONTEXT_PRUNER_AGENT_ID, FreebuffModel, models_response, resolve_model
+from .anthropic_compat import (
+    AnthropicCompletionAccumulator,
+    AnthropicStreamState,
+    anthropic_error_payload,
+    anthropic_sse_encode,
+    anthropic_sse_ping,
+    build_anthropic_upstream_payload,
+)
+from .models import (
+    CONTEXT_PRUNER_AGENT_ID,
+    FreebuffModel,
+    model_response,
+    models_response,
+    resolve_model,
+)
 from .sse import decode_sse_data, encode_sse
 
 
@@ -92,6 +106,19 @@ def _check_freebuff_token(request: Request) -> None:
         )
 
 
+def _check_anthropic_auth(request: Request, *, require_configured: bool = False) -> None:
+    api_key = _settings(request).local_api_key
+    if not api_key:
+        if require_configured:
+            raise HTTPException(
+                status_code=503,
+                detail="Set FREEBUFF_API_KEY in the admin panel before using /v1 APIs",
+            )
+        return
+    if request.headers.get("x-api-key") != api_key:
+        raise HTTPException(status_code=401, detail="Invalid API key")
+
+
 def _error_response(error: Exception) -> JSONResponse:
     if isinstance(error, CodebuffError):
         return JSONResponse(
@@ -117,6 +144,15 @@ async def healthz(request: Request) -> dict[str, Any]:
 async def list_models(request: Request) -> dict[str, Any]:
     _check_local_auth(request, require_configured=True)
     return models_response()
+
+
+@app.get("/v1/models/{model_id:path}")
+async def get_model(request: Request, model_id: str) -> dict[str, Any]:
+    _check_local_auth(request, require_configured=True)
+    result = model_response(model_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"Model not found: {model_id}")
+    return result
 
 
 @app.post("/v1/chat/completions")
@@ -165,6 +201,7 @@ async def chat_completions(request: Request) -> Any:
             client_id=settings.client_id,
             trace_session_id=trace_session_id,
             upstream_model_id=model_config.upstream_id,
+            system_prompt=settings.system_prompt_override,
         )
         if settings.debug:
             logger.debug(
@@ -456,3 +493,228 @@ async def _finalize_run_with_client(
         )
     except Exception:
         logger.exception("finalize run failed run_id=%s", run.run_id)
+
+
+# ── Anthropic Messages API (/v1/messages) ─────────────────────────────
+
+
+@app.post("/v1/messages")
+async def anthropic_messages(request: Request) -> Any:
+    _check_anthropic_auth(request, require_configured=True)
+    _check_freebuff_token(request)
+    body = await request.json()
+    settings = _settings(request)
+
+    # Validate required fields.
+    if not isinstance(body.get("messages"), list):
+        raise HTTPException(
+            status_code=400,
+            detail="messages: field required (must be a non-empty list)",
+        )
+    if not body.get("messages"):
+        raise HTTPException(
+            status_code=400,
+            detail="messages: must be a non-empty list",
+        )
+    if body.get("max_tokens") is None:
+        raise HTTPException(
+            status_code=400,
+            detail="max_tokens: field required",
+        )
+
+    # Model resolution.
+    try:
+        model_config = resolve_model(body.get("model"))
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    model = model_config.id
+    stream = body.get("stream") is True
+    logger.info(
+        "anthropic messages request model=%s stream=%s messages=%s max_tokens=%s",
+        model,
+        stream,
+        len(body["messages"]),
+        body["max_tokens"],
+    )
+    if settings.debug:
+        logger.debug(
+            "incoming anthropic request headers=%s",
+            redact_headers(dict(request.headers)),
+        )
+        logger.debug(
+            "anthropic messages request body=%s",
+            render_debug(body, settings.log_body_chars),
+        )
+
+    # Session & run preparation (shared with OpenAI path).
+    lease: CodebuffAccountLease | None = None
+    try:
+        lease = await _accounts(request).acquire_session(
+            model_config.session_id,
+        )
+        client = lease.client
+        await client.request_ad_chain()
+        await client.validate_agents()
+        run = await _start_freebuff_run_chain(client, model_config)
+        trace_session_id = str(uuid.uuid4())
+        payload = build_anthropic_upstream_payload(
+            body,
+            session=lease.session,
+            run_id=run.payload_run_id,
+            client_id=settings.client_id,
+            trace_session_id=trace_session_id,
+            upstream_model_id=model_config.upstream_id,
+            system_prompt=settings.system_prompt_override,
+        )
+        if settings.debug:
+            logger.debug(
+                "prepared upstream anthropic trace=%s run=%s payload=%s",
+                trace_session_id,
+                run,
+                render_debug(payload, settings.log_body_chars),
+            )
+    except CodebuffError as error:
+        if lease is not None:
+            await lease.aclose()
+        logger.warning(
+            "failed to prepare anthropic messages: %s",
+            error,
+            exc_info=settings.debug,
+        )
+        status_code = getattr(error, "status_code", 502)
+        return JSONResponse(
+            status_code=status_code,
+            content=anthropic_error_payload(str(error), status_code=status_code),
+        )
+    except Exception as error:
+        if lease is not None:
+            await lease.aclose()
+        logger.exception("failed to prepare anthropic messages")
+        return JSONResponse(
+            status_code=500,
+            content=anthropic_error_payload(str(error)),
+        )
+
+    if stream:
+        return StreamingResponse(
+            _stream_anthropic_events(request, payload, run, account_lease=lease),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache, no-transform",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    try:
+        response = await _collect_anthropic_message(
+            request,
+            payload,
+            run,
+            model,
+            client=lease.client,
+        )
+        return JSONResponse(response)
+    except Exception as error:
+        return JSONResponse(
+            status_code=500,
+            content=anthropic_error_payload(str(error)),
+        )
+    finally:
+        await lease.aclose()
+
+
+async def _stream_anthropic_events(
+    request: Request,
+    payload: dict[str, Any],
+    run: FreebuffRun,
+    *,
+    account_lease: CodebuffAccountLease | None = None,
+    client: CodebuffClient | None = None,
+) -> AsyncIterator[bytes]:
+    client = client or (account_lease.client if account_lease else _client(request))
+    settings = _settings(request)
+    state = AnthropicStreamState(model=payload.get("model", ""))
+    _ping_active = True
+
+    async def _ping_loop() -> None:
+        """Send ping every ~15 s to keep the connection alive across proxies."""
+        try:
+            while _ping_active:
+                await asyncio.sleep(15)
+                if _ping_active:
+                    yield anthropic_sse_ping()
+        except asyncio.CancelledError:
+            pass
+
+    try:
+        async for line in client.chat_events(payload):
+            data = decode_sse_data(line)
+            if data is None:
+                continue
+            if data == "[DONE]":
+                # Emit final events.
+                for event_type, event_data in state.finalize_events():
+                    yield anthropic_sse_encode(event_type, event_data)
+                break
+
+            for event_type, event_data in state.consume_chunk(data):
+                if settings.debug:
+                    logger.debug(
+                        "anthropic stream event=%s data=%s",
+                        event_type,
+                        render_debug(event_data, settings.log_body_chars),
+                    )
+                yield anthropic_sse_encode(event_type, event_data)
+    except CodebuffError as error:
+        logger.warning(
+            "anthropic stream failed run_id=%s: %s",
+            run.run_id,
+            error,
+            exc_info=settings.debug,
+        )
+        error_payload = anthropic_error_payload(str(error))
+        yield anthropic_sse_encode("error", error_payload)
+    finally:
+        _ping_active = False
+        _schedule_finalize_run(client, run, None)
+        if account_lease is not None:
+            await account_lease.aclose()
+
+
+async def _collect_anthropic_message(
+    request: Request,
+    payload: dict[str, Any],
+    run: FreebuffRun,
+    model: str,
+    *,
+    client: CodebuffClient | None = None,
+) -> dict[str, Any]:
+    accumulator = AnthropicCompletionAccumulator(model)
+    client = client or _client(request)
+    try:
+        async for line in client.chat_events(payload):
+            data = decode_sse_data(line)
+            if data is None:
+                continue
+            if data == "[DONE]":
+                break
+            accumulator.add(data)
+        response = accumulator.final_response()
+        content_blocks = len(response.get("content") or [])
+        stop_reason = response.get("stop_reason")
+        logger.info(
+            "anthropic message response run_id=%s id=%s content_blocks=%s stop_reason=%s",
+            run.run_id,
+            response.get("id"),
+            content_blocks,
+            stop_reason,
+        )
+        if _settings(request).debug:
+            logger.debug(
+                "anthropic message response body=%s",
+                render_debug(response, _settings(request).log_body_chars),
+            )
+        return response
+    finally:
+        await _finalize_run(request, run, None, client=client)
