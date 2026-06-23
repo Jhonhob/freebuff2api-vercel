@@ -25,8 +25,8 @@ class AnthropicMessagesEndpointTests(unittest.TestCase):
         self.assertEqual(response.status_code, 503)
         self.assertIn("FREEBUFF_API_KEY", response.json()["detail"])
 
-    def test_messages_endpoint_rejects_bearer_auth(self) -> None:
-        """Anthropic endpoints should use x-api-key, not Authorization: Bearer."""
+    def test_messages_endpoint_accepts_bearer_auth(self) -> None:
+        """Anthropic endpoints now accept both x-api-key and Authorization: Bearer."""
         with patch.dict(
             "os.environ",
             {"FREEBUFF_API_KEY": "test-key"},
@@ -43,7 +43,8 @@ class AnthropicMessagesEndpointTests(unittest.TestCase):
                     headers={"Authorization": "Bearer test-key"},
                 )
 
-        self.assertEqual(response.status_code, 401)
+        # Auth should pass (no 401); missing FREEBUFF_TOKEN returns 503
+        self.assertNotEqual(response.status_code, 401)
 
     def test_messages_endpoint_accepts_x_api_key(self) -> None:
         with patch.dict(

@@ -44,6 +44,8 @@ class Settings:
     locale: str = "zh-CN"
     os_name: str = "windows"
     system_prompt_override: str | None = None
+    api_keys_json: str | None = None
+    max_request_records: int = 5000
 
     @property
     def codebuff_api_url(self) -> str:
@@ -123,6 +125,8 @@ def load_settings() -> Settings:
         locale=os.getenv("FREEBUFF_LOCALE", "zh-CN"),
         os_name=os.getenv("FREEBUFF_OS", "windows"),
         system_prompt_override=os.getenv("FREEBUFF_SYSTEM_PROMPT_OVERRIDE"),
+        api_keys_json=os.getenv("FREEBUFF_API_KEYS"),
+        max_request_records=_int("FREEBUFF_MAX_REQUEST_RECORDS", 5000),
     )
 
 

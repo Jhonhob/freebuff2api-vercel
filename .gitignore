@@ -11,3 +11,14 @@ wheels/
 
 # Local configuration
 .env
+
+# IDE / agent tooling caches
+.lrnev/
+.reasonix/
+.kunsdd/
+
+# Project snapshots
+freebuff2api-main-oran/
+
+# Data directory (runtime generated)
+data/

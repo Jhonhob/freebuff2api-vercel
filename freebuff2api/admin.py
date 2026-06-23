@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import datetime
 import hmac
+import json
 import os
 import time
 from dataclasses import replace
@@ -16,6 +18,8 @@ from .codebuff import CodebuffAccountPool, CodebuffClient, CodebuffError
 from .config import DEFAULT_ADMIN_KEY, Settings, project_env_path, write_env_values
 from .logging_config import get_buffered_logs
 from .models import DEFAULT_MODEL, models_response
+from .usage import ApiKeyRecord
+from .usage_store import ApiKeyStore, RequestStore
 
 
 COOKIE_NAME = "freebuff_admin_session"
@@ -533,3 +537,133 @@ async def chat_test(request: Request) -> dict[str, Any]:
         return _api_ok({"ok": False, "info": str(error)})
     finally:
         await lease.aclose()
+
+
+# ── Request Records ────────────────────────────────────────────────────
+
+
+@router.get("/admin/api/requests")
+async def list_requests(
+    request: Request,
+    since_id: int = 0,
+    limit: int = 200,
+    model: str | None = None,
+    status: str | None = None,
+    api_key_name: str | None = None,
+) -> dict[str, Any]:
+    _check_admin_auth(request)
+    store: RequestStore = request.app.state.request_store
+    items = store.list(
+        since_id=since_id, limit=limit, model=model,
+        status=status, api_key_name=api_key_name,
+    )
+    return _api_ok({"items": items, "limit": limit})
+
+
+@router.get("/admin/api/requests/stats")
+async def request_stats(request: Request) -> dict[str, Any]:
+    _check_admin_auth(request)
+    store: RequestStore = request.app.state.request_store
+    return _api_ok(store.stats())
+
+
+@router.delete("/admin/api/requests")
+async def clear_requests(request: Request) -> dict[str, Any]:
+    _check_admin_auth(request)
+    store: RequestStore = request.app.state.request_store
+    store.clear()
+    return _api_ok({}, "request records cleared")
+
+
+# ── API Key Management ────────────────────────────────────────────────
+
+
+def _api_key_store(request: Request) -> ApiKeyStore:
+    return request.app.state.api_key_store
+
+
+def _persist_api_keys(request: Request) -> tuple[bool, str]:
+    store = _api_key_store(request)
+    env_json = store.to_env_json()
+    if not _is_vercel():
+        write_env_values({"FREEBUFF_API_KEYS": env_json})
+    _apply_env({"FREEBUFF_API_KEYS": env_json})
+    return not _is_vercel(), env_json
+
+
+@router.get("/admin/api/api-keys")
+async def list_api_keys(request: Request) -> dict[str, Any]:
+    _check_admin_auth(request)
+    store = _api_key_store(request)
+    return _api_ok({"items": store.list_all(), "count": store.total_count, "active_count": store.count})
+
+
+@router.post("/admin/api/api-keys")
+async def create_api_key(request: Request) -> dict[str, Any]:
+    _check_admin_auth(request)
+    body = await request.json()
+    name = str(body.get("name") or "").strip()
+    key = str(body.get("key") or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+    if len(key) < 8:
+        raise HTTPException(status_code=400, detail="key must be at least 8 characters")
+    store = _api_key_store(request)
+    if store.get(name):
+        raise HTTPException(status_code=409, detail=f"API key '{name}' already exists")
+    allowed = body.get("allowed_models", ["*"])
+    rec = ApiKeyRecord(
+        name=name, key=key,
+        allowed_models=allowed if isinstance(allowed, list) else ["*"],
+        enabled=True,
+        created_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),
+    )
+    store.add(rec)
+    persisted, _ = _persist_api_keys(request)
+    return _api_ok(rec.to_dict(mask=True), f"created{' and persisted' if persisted else ''}")
+
+
+@router.put("/admin/api/api-keys/{name}")
+async def update_api_key(request: Request, name: str) -> dict[str, Any]:
+    _check_admin_auth(request)
+    body = await request.json()
+    store = _api_key_store(request)
+    fields: dict[str, Any] = {}
+    if "key" in body:
+        k = str(body["key"]).strip()
+        if k and len(k) < 8:
+            raise HTTPException(status_code=400, detail="key must be at least 8 characters")
+        fields["key"] = k
+    if "allowed_models" in body:
+        am = body["allowed_models"]
+        fields["allowed_models"] = am if isinstance(am, list) else ["*"]
+    if "enabled" in body:
+        fields["enabled"] = bool(body["enabled"])
+    if not store.update(name, **fields):
+        raise HTTPException(status_code=404, detail=f"API key '{name}' not found")
+    persisted, _ = _persist_api_keys(request)
+    updated = store.get(name)
+    return _api_ok(updated.to_dict(mask=True) if updated else {}, f"updated{' and persisted' if persisted else ''}")
+
+
+@router.delete("/admin/api/api-keys/{name}")
+async def delete_api_key(request: Request, name: str) -> dict[str, Any]:
+    _check_admin_auth(request)
+    store = _api_key_store(request)
+    if not store.delete(name):
+        raise HTTPException(status_code=404, detail=f"API key '{name}' not found")
+    persisted, _ = _persist_api_keys(request)
+    return _api_ok({}, f"deleted{' and persisted' if persisted else ''}")
+
+
+@router.put("/admin/api/api-keys/{name}/toggle")
+async def toggle_api_key(request: Request, name: str) -> dict[str, Any]:
+    _check_admin_auth(request)
+    store = _api_key_store(request)
+    rec = store.get(name)
+    if not rec:
+        raise HTTPException(status_code=404, detail=f"API key '{name}' not found")
+    store.update(name, enabled=not rec.enabled)
+    persisted, _ = _persist_api_keys(request)
+    updated = store.get(name)
+    return _api_ok(updated.to_dict(mask=True) if updated else {}, "toggled")

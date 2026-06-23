@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+import datetime
 import logging
+import time
 from typing import Any, AsyncIterator
 import uuid
 
@@ -43,6 +45,8 @@ from .models import (
     resolve_model,
 )
 from .sse import decode_sse_data, encode_sse
+from .usage import RequestRecord
+from .usage_store import RequestStore, ApiKeyStore, create_stores
 
 
 logger = logging.getLogger("freebuff2api.app")
@@ -53,11 +57,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = load_settings()
     configure_logging(settings)
     accounts = CodebuffAccountPool(settings)
+    request_store, api_key_store = create_stores(settings.max_request_records)
+    api_key_store.load_from_settings(settings.api_keys_json, settings.local_api_key)
     app.state.settings = settings
     app.state.accounts = accounts
     app.state.codebuff = accounts.default_client
     app.state.sessions = accounts.default_sessions
-    logger.info("configured freebuff accounts count=%s", accounts.account_count)
+    app.state.request_store = request_store
+    app.state.api_key_store = api_key_store
+    logger.info("configured freebuff accounts count=%s api_keys=%s", accounts.account_count, api_key_store.total_count)
     try:
         yield
     finally:
@@ -84,18 +92,22 @@ def _accounts(request: Request) -> CodebuffAccountPool:
     return request.app.state.accounts
 
 
-def _check_local_auth(request: Request, *, require_configured: bool = False) -> None:
-    api_key = _settings(request).local_api_key
-    if not api_key:
+def _check_local_auth(request: Request, *, require_configured: bool = False):
+    store: ApiKeyStore = request.app.state.api_key_store
+    if store.total_count == 0:
         if require_configured:
             raise HTTPException(
                 status_code=503,
                 detail="Set FREEBUFF_API_KEY in the admin panel before using /v1 APIs",
             )
-        return
-    expected = f"Bearer {api_key}"
-    if request.headers.get("authorization") != expected:
+        return None
+    key = store.authenticate(
+        request.headers.get("authorization"),
+        request.headers.get("x-api-key"),
+    )
+    if not key:
         raise HTTPException(status_code=401, detail="Invalid API key")
+    return key
 
 
 def _check_freebuff_token(request: Request) -> None:
@@ -106,17 +118,22 @@ def _check_freebuff_token(request: Request) -> None:
         )
 
 
-def _check_anthropic_auth(request: Request, *, require_configured: bool = False) -> None:
-    api_key = _settings(request).local_api_key
-    if not api_key:
+def _check_anthropic_auth(request: Request, *, require_configured: bool = False):
+    store: ApiKeyStore = request.app.state.api_key_store
+    if store.total_count == 0:
         if require_configured:
             raise HTTPException(
                 status_code=503,
                 detail="Set FREEBUFF_API_KEY in the admin panel before using /v1 APIs",
             )
-        return
-    if request.headers.get("x-api-key") != api_key:
+        return None
+    key = store.authenticate(
+        request.headers.get("authorization"),
+        request.headers.get("x-api-key"),
+    )
+    if not key:
         raise HTTPException(status_code=401, detail="Invalid API key")
+    return key
 
 
 def _error_response(error: Exception) -> JSONResponse:
@@ -132,6 +149,37 @@ def _error_response(error: Exception) -> JSONResponse:
             },
         )
     raise error
+
+
+def _record_request(
+    request: Request,
+    api_key,
+    model: str,
+    duration_ms: int,
+    status: str,
+    *,
+    error: str | None = None,
+    prompt_tokens: int = 0,
+    completion_tokens: int = 0,
+    total_tokens: int = 0,
+) -> None:
+    store: RequestStore = request.app.state.request_store
+    ts = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    record = RequestRecord(
+        id=0,
+        timestamp=ts,
+        api_key_name=api_key.name if api_key else "anonymous",
+        api_key_prefix=api_key.prefix if api_key else "---",
+        model=model,
+        duration_ms=duration_ms,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=total_tokens,
+        status=status,
+        error=error,
+        client_ip=request.client.host if request.client else None,
+    )
+    store.add(record)
 
 
 @app.get("/healthz")
@@ -157,7 +205,7 @@ async def get_model(request: Request, model_id: str) -> dict[str, Any]:
 
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request) -> Any:
-    _check_local_auth(request, require_configured=True)
+    api_key = _check_local_auth(request, require_configured=True)
     _check_freebuff_token(request)
     body = await request.json()
     settings = _settings(request)
@@ -166,6 +214,8 @@ async def chat_completions(request: Request) -> Any:
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     model = model_config.id
+    if api_key and not api_key.allows_model(model):
+        raise HTTPException(status_code=403, detail=f"API key '{api_key.name}' not allowed to use model '{model}'")
     logger.info(
         "chat completion request model=%s stream=%s messages=%s",
         model,
@@ -227,7 +277,7 @@ async def chat_completions(request: Request) -> Any:
 
     if body.get("stream") is True:
         return StreamingResponse(
-            _stream_openai_chunks(request, payload, run, account_lease=lease),
+            _stream_openai_chunks(request, payload, run, api_key=api_key, account_lease=lease),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache, no-transform",
@@ -236,6 +286,7 @@ async def chat_completions(request: Request) -> Any:
             },
         )
 
+    started = time.time()
     try:
         response = await _collect_completion(
             request,
@@ -244,8 +295,16 @@ async def chat_completions(request: Request) -> Any:
             model,
             client=lease.client,
         )
+        duration_ms = int((time.time() - started) * 1000)
+        usage = response.get("usage") or {}
+        _record_request(request, api_key, model, duration_ms, "success",
+            prompt_tokens=usage.get("prompt_tokens", 0),
+            completion_tokens=usage.get("completion_tokens", 0),
+            total_tokens=usage.get("total_tokens", 0))
         return JSONResponse(response)
     except Exception as error:
+        duration_ms = int((time.time() - started) * 1000)
+        _record_request(request, api_key, model, duration_ms, "error", error=str(error))
         return _error_response(error)
     finally:
         await lease.aclose()
@@ -256,9 +315,11 @@ async def _stream_openai_chunks(
     payload: dict[str, Any],
     run: FreebuffRun,
     *,
+    api_key = None,
     account_lease: CodebuffAccountLease | None = None,
     client: CodebuffClient | None = None,
 ) -> AsyncIterator[bytes]:
+    started = time.time()
     message_id: str | None = None
     client = client or (account_lease.client if account_lease else _client(request))
     settings = _settings(request)
@@ -298,6 +359,9 @@ async def _stream_openai_chunks(
             error,
             exc_info=settings.debug,
         )
+        if api_key:
+            duration_ms = int((time.time() - started) * 1000)
+            _record_request(request, api_key, payload.get("model", ""), duration_ms, "error", error=str(error))
         yield encode_sse(
             {
                 "error": {
@@ -309,6 +373,9 @@ async def _stream_openai_chunks(
         )
         yield encode_sse("[DONE]")
     finally:
+        if api_key:
+            duration_ms = int((time.time() - started) * 1000)
+            _record_request(request, api_key, payload.get("model", ""), duration_ms, "success")
         _schedule_finalize_run(client, run, message_id)
         if account_lease is not None:
             await account_lease.aclose()
@@ -500,7 +567,7 @@ async def _finalize_run_with_client(
 
 @app.post("/v1/messages")
 async def anthropic_messages(request: Request) -> Any:
-    _check_anthropic_auth(request, require_configured=True)
+    api_key = _check_anthropic_auth(request, require_configured=True)
     _check_freebuff_token(request)
     body = await request.json()
     settings = _settings(request)
@@ -528,6 +595,8 @@ async def anthropic_messages(request: Request) -> Any:
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
     model = model_config.id
+    if api_key and not api_key.allows_model(model):
+        raise HTTPException(status_code=403, detail=f"API key '{api_key.name}' not allowed to use model '{model}'")
     stream = body.get("stream") is True
     logger.info(
         "anthropic messages request model=%s stream=%s messages=%s max_tokens=%s",
@@ -597,7 +666,7 @@ async def anthropic_messages(request: Request) -> Any:
 
     if stream:
         return StreamingResponse(
-            _stream_anthropic_events(request, payload, run, account_lease=lease),
+            _stream_anthropic_events(request, payload, run, api_key=api_key, account_lease=lease),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache, no-transform",
@@ -606,6 +675,7 @@ async def anthropic_messages(request: Request) -> Any:
             },
         )
 
+    started = time.time()
     try:
         response = await _collect_anthropic_message(
             request,
@@ -614,8 +684,15 @@ async def anthropic_messages(request: Request) -> Any:
             model,
             client=lease.client,
         )
+        duration_ms = int((time.time() - started) * 1000)
+        _record_request(request, api_key, model, duration_ms, "success",
+            prompt_tokens=response.get("usage", {}).get("input_tokens", 0),
+            completion_tokens=response.get("usage", {}).get("output_tokens", 0),
+            total_tokens=(response.get("usage", {}).get("input_tokens", 0) + response.get("usage", {}).get("output_tokens", 0)))
         return JSONResponse(response)
     except Exception as error:
+        duration_ms = int((time.time() - started) * 1000)
+        _record_request(request, api_key, model, duration_ms, "error", error=str(error))
         return JSONResponse(
             status_code=500,
             content=anthropic_error_payload(str(error)),
@@ -629,9 +706,11 @@ async def _stream_anthropic_events(
     payload: dict[str, Any],
     run: FreebuffRun,
     *,
+    api_key = None,
     account_lease: CodebuffAccountLease | None = None,
     client: CodebuffClient | None = None,
 ) -> AsyncIterator[bytes]:
+    started = time.time()
     client = client or (account_lease.client if account_lease else _client(request))
     settings = _settings(request)
     state = AnthropicStreamState(model=payload.get("model", ""))
@@ -676,6 +755,9 @@ async def _stream_anthropic_events(
         error_payload = anthropic_error_payload(str(error))
         yield anthropic_sse_encode("error", error_payload)
     finally:
+        if api_key:
+            duration_ms = int((time.time() - started) * 1000)
+            _record_request(request, api_key, payload.get("model", ""), duration_ms, "success")
         _ping_active = False
         _schedule_finalize_run(client, run, None)
         if account_lease is not None:

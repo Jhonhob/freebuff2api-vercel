@@ -241,6 +241,27 @@
       font-size: 12px;
     }
 
+    .req-toolbar { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 14px; align-items: center; }
+    .req-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .req-table th, .req-table td { padding: 8px 10px; text-align: left; border-bottom: 1px solid var(--line); }
+    .req-table th { color: var(--muted); font-weight: 600; font-size: 11px; text-transform: uppercase; white-space: nowrap; }
+    .req-table td { font-family: var(--mono); font-size: 12px; }
+    .req-table tr:hover { background: var(--accent-soft); }
+    .req-status-success { color: #16a34a; }
+    .req-status-error { color: #dc2626; }
+
+    .apikey-row {
+      display: grid;
+      grid-template-columns: 120px minmax(0, 1fr) minmax(0, 1fr) 60px 120px;
+      gap: 8px;
+      align-items: center;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fbfdff;
+    }
+    .apikey-row .apikey-models { font-size: 12px; display: flex; flex-wrap: wrap; gap: 4px; }
+
     @media (max-width: 980px) {
       .login-shell { grid-template-columns: 1fr; }
       .login-brief { padding: 34px 24px; min-height: 42dvh; }
@@ -254,6 +275,8 @@
       .log-line { grid-template-columns: 1fr; gap: 0; padding: 8px 0; }
       .token-row { grid-template-columns: 1fr; }
       .token-actions { justify-content: flex-start; }
+      .apikey-row, .req-table { display: block; }
+      .req-table tr { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; padding: 8px 0; }
     }
   </style>
 </head>
@@ -284,7 +307,7 @@
             </div>
             <div>
               <h1 class="login-title">freebuff2api 管理面板</h1>
-              <p class="login-subtitle">管理 Freebuff Token、查看运行日志、检查账号池状态，并在本地服务中立即应用配置。</p>
+              <p class="login-subtitle">管理 Freebuff Token、API Key、查看请求记录和运行日志。</p>
             </div>
             <p class="muted mono">/admin</p>
           </section>
@@ -320,6 +343,7 @@
             <div class="sidebar-foot">
               <div>环境：{{ config.environment || '-' }}</div>
               <div>上游：{{ overview.base_url || '-' }}</div>
+              <div>请求：{{ reqStats.total || 0 }}</div>
             </div>
           </aside>
 
@@ -336,10 +360,11 @@
               </div>
             </header>
 
+            <!-- ====== Overview ====== -->
             <section v-if="tab === 'overview'">
               <n-alert v-if="config.using_default_admin_key || !config.api_key_configured || !config.token_count" type="warning" title="初始化未完成" style="margin-bottom: 16px;">
                 <div v-if="config.using_default_admin_key">当前仍在使用默认 Admin Key：sk-admin，请到设置页修改。</div>
-                <div v-if="!config.api_key_configured">FREEBUFF_API_KEY 未配置，/v1/* API 会暂时返回配置错误。</div>
+                <div v-if="!config.api_key_configured">API Key 未配置，/v1/* API 会暂时返回配置错误。</div>
                 <div v-if="!config.token_count">FREEBUFF_TOKEN 未配置，请到 Token 页添加后热更新生效。</div>
               </n-alert>
               <div class="metric-grid">
@@ -348,10 +373,16 @@
                 <div class="metric"><div class="metric-label">日志等级</div><div class="metric-value">{{ overview.log_level || '-' }}</div><div class="metric-note">Debug: {{ overview.debug ? 'on' : 'off' }}</div></div>
                 <div class="metric"><div class="metric-label">部署环境</div><div class="metric-value">{{ config.environment || '-' }}</div><div class="metric-note">Vercel 写入不持久</div></div>
               </div>
+              <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:18px;">
+                <div class="metric"><div class="metric-label">今日请求</div><div class="metric-value">{{ reqStats.total || 0 }}</div><div class="metric-note">成功: {{ reqStats.success || 0 }} 失败: {{ reqStats.error || 0 }}</div></div>
+                <div class="metric"><div class="metric-label">总 Token</div><div class="metric-value">{{ (reqStats.total_tokens||0).toLocaleString() }}</div><div class="metric-note">Prompt: {{ (reqStats.total_prompt_tokens||0).toLocaleString() }}</div></div>
+                <div class="metric"><div class="metric-label">平均耗时</div><div class="metric-value">{{ reqStats.avg_duration_ms || 0 }}ms</div><div class="metric-note">API Key 数: {{ apiKeys.count || 0 }}</div></div>
+                <div class="metric"><div class="metric-label">活跃 Key</div><div class="metric-value">{{ apiKeys.active_count || 0 }}</div><div class="metric-note">总数: {{ apiKeys.count || 0 }}</div></div>
+              </div>
               <div class="panel-grid">
                 <n-card title="当前配置" :bordered="true">
                   <n-descriptions label-placement="left" :column="1" size="small" bordered>
-                    <n-descriptions-item label="API Key">{{ config.api_key_configured ? config.api_key_masked : '未设置' }}</n-descriptions-item>
+                    <n-descriptions-item label="API Keys">{{ apiKeys.count || 0 }} 个</n-descriptions-item>
                     <n-descriptions-item label="Admin Key">{{ config.admin_key_configured ? config.admin_key_masked : '未设置' }}{{ config.using_default_admin_key ? '（默认）' : '' }}</n-descriptions-item>
                     <n-descriptions-item label="代理">{{ config.proxy_enabled ? config.proxy_url : '关闭' }}</n-descriptions-item>
                     <n-descriptions-item label="Base URL">{{ config.base_url }}</n-descriptions-item>
@@ -370,6 +401,7 @@
               </div>
             </section>
 
+            <!-- ====== Tokens ====== -->
             <section v-if="tab === 'tokens'" class="panel-grid">
               <n-card :bordered="true">
                 <div class="section-head">
@@ -400,29 +432,83 @@
               </n-card>
               <n-card title="显示规则" :bordered="true">
                 <p class="muted">列表默认只显示脱敏 token，不展示完整值。</p>
-                <p class="muted">点击“修改”时才会读取完整 token 并显示在弹窗输入框中。</p>
+                <p class="muted">点击"修改"时才会读取完整 token 并显示在弹窗输入框中。</p>
                 <p class="muted">本地或常驻服务器保存后会写入 .env 并立即替换账号池；Vercel 只返回环境变量文本。</p>
               </n-card>
             </section>
 
-            <section v-if="tab === 'apiKey'" class="panel-grid">
-              <n-card title="API Key" :bordered="true">
-                <n-alert type="default" style="margin-bottom: 16px;">
-                  当前 API Key：{{ config.api_key_configured ? config.api_key_masked : '未设置' }}
-                </n-alert>
-                <n-form>
-                  <n-form-item label="新的 API Key">
-                    <n-input v-model:value="apiKeyForm.api_key" type="password" show-password-on="click" placeholder="用于 /v1/* 接口的 Authorization Bearer key" />
-                  </n-form-item>
-                  <n-button type="primary" :loading="loading.apiKey" @click="saveApiKey">保存 API Key</n-button>
-                </n-form>
+            <!-- ====== API Keys ====== -->
+            <section v-if="tab === 'apiKeys'" class="panel-grid">
+              <n-card :bordered="true">
+                <div class="section-head">
+                  <h3>API Key 列表</h3>
+                  <n-button type="primary" @click="openApiKeyModal('add')">添加 Key</n-button>
+                </div>
+                <div v-if="apiKeys.items && apiKeys.items.length" class="token-list">
+                  <div v-for="item in apiKeys.items" :key="item.name" class="apikey-row">
+                    <span class="mono" style="font-weight:600;">{{ item.name }}</span>
+                    <span class="mono muted">{{ item.key_prefix }}...</span>
+                    <span class="apikey-models">
+                      <n-tag v-for="m in item.allowed_models.slice(0,3)" :key="m" size="tiny" :bordered="false">{{ m }}</n-tag>
+                      <span v-if="item.allowed_models.length > 3" class="muted">+{{ item.allowed_models.length - 3 }}</span>
+                    </span>
+                    <n-switch :value="item.enabled" @update:value="toggleApiKey(item.name)" size="small" />
+                    <span class="token-actions">
+                      <n-button size="small" secondary @click="openApiKeyModal('edit', item)">编辑</n-button>
+                      <n-popconfirm @positive-click="deleteApiKey(item.name)">
+                        <template #trigger><n-button size="small" tertiary type="error">删除</n-button></template>
+                        删除 API Key "{{ item.name }}"？
+                      </n-popconfirm>
+                    </span>
+                  </div>
+                </div>
+                <div v-else class="empty-box">还没有 API Key，点击右上角添加。</div>
               </n-card>
-              <n-card title="调用方式" :bordered="true">
-                <div class="env-box">Authorization: Bearer {{ apiKeyForm.api_key || config.api_key_masked || 'your-api-key' }}</div>
-                <p class="muted">API Key 和管理员 Key 分开管理。API Key 用于外部客户端调用模型接口。</p>
+              <n-card title="使用说明" :bordered="true">
+                <p class="muted">每个 API Key 可独立设置允许调用的模型。</p>
+                <p class="muted">调用时使用 <code>Authorization: Bearer &lt;key&gt;</code> 或 <code>x-api-key: &lt;key&gt;</code>。</p>
+                <p class="muted">如果旧版 FREEBUFF_API_KEY 存在，会作为 "default" Key 自动加载。</p>
               </n-card>
             </section>
 
+            <!-- ====== Request Records ====== -->
+            <section v-if="tab === 'requests'">
+              <div class="req-toolbar">
+                <n-select v-model:value="reqFilter.status" :options="reqStatusOptions" style="width:120px" placeholder="状态" clearable />
+                <n-select v-model:value="reqFilter.model" :options="reqModelOptions" style="width:200px" placeholder="模型" clearable filterable />
+                <n-input-number v-model:value="reqLimit" :min="20" :max="500" style="width:120px" />
+                <n-button type="primary" secondary :loading="loading.requests" @click="loadRequests">刷新</n-button>
+                <n-popconfirm @positive-click="clearRequests">
+                  <template #trigger><n-button tertiary type="error" size="small">清空记录</n-button></template>
+                  确定清空所有请求记录？
+                </n-popconfirm>
+                <span class="muted">显示 {{ reqRecords.length }} / {{ reqLimit }} 条</span>
+              </div>
+              <div style="overflow-x:auto;">
+                <table class="req-table" v-if="reqRecords.length">
+                  <thead>
+                    <tr>
+                      <th>时间</th><th>API Key</th><th>模型</th><th>耗时</th><th>Prompt</th><th>Completion</th><th>总计</th><th>状态</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="r in reqRecords" :key="r.id">
+                      <td :title="r.timestamp">{{ r.timestamp.slice(11,19) }}</td>
+                      <td>{{ r.api_key_name }}</td>
+                      <td>{{ r.model.slice(r.model.lastIndexOf('/')+1) }}</td>
+                      <td>{{ r.duration_ms }}ms</td>
+                      <td>{{ r.prompt_tokens.toLocaleString() }}</td>
+                      <td>{{ r.completion_tokens.toLocaleString() }}</td>
+                      <td>{{ r.total_tokens.toLocaleString() }}</td>
+                      <td><span :class="'req-status-' + r.status">{{ r.status }}</span>{{ r.error ? ' (' + r.error.slice(0,60) + ')' : '' }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+                <div v-else class="empty-box">还没有请求记录，发送 API 请求后这里会显示数据。</div>
+              </div>
+            </section>
+
+            <!-- ====== Env ====== -->
             <section v-if="tab === 'env'" class="panel-grid">
               <n-card title="Env 配置" :bordered="true">
                 <n-alert :type="envInfo.environment === 'vercel' ? 'warning' : 'info'" style="margin-bottom: 16px;">
@@ -441,11 +527,12 @@
               </n-card>
               <n-card title="Vercel 修改方式" :bordered="true">
                 <p class="muted">进入 Vercel 项目页面，打开 Settings -> Environment Variables。</p>
-                <p class="muted">修改 `FREEBUFF_TOKEN`、`FREEBUFF_API_KEY`、`FREEBUFF_ADMIN_KEY` 等变量后，需要重新部署。</p>
-                <p class="muted">本地 `.env` 不会上传到 GitHub，也不会被 Vercel 自动读取。</p>
+                <p class="muted">修改变量后需要重新部署。</p>
+                <p class="muted">本地 .env 不会上传到 GitHub，也不会被 Vercel 自动读取。</p>
               </n-card>
             </section>
 
+            <!-- ====== Network ====== -->
             <section v-if="tab === 'network'" class="panel-grid">
               <n-card title="服务器网络环境" :bordered="true">
                 <n-space style="margin-bottom: 14px;">
@@ -477,6 +564,7 @@
               </n-card>
             </section>
 
+            <!-- ====== Logs ====== -->
             <section v-if="tab === 'logs'">
               <div class="log-toolbar">
                 <n-select v-model:value="logLevel" :options="logLevels" style="width: 160px" />
@@ -501,6 +589,7 @@
               </div>
             </section>
 
+            <!-- ====== Test ====== -->
             <section v-if="tab === 'test'" class="panel-grid">
               <n-card title="模型调用" :bordered="true">
                 <n-form>
@@ -521,6 +610,7 @@
               </n-card>
             </section>
 
+            <!-- ====== Settings ====== -->
             <section v-if="tab === 'settings'" class="panel-grid">
               <n-card title="管理员 Key" :bordered="true">
                 <n-form>
@@ -532,10 +622,11 @@
               </n-card>
               <n-card title="GitHub 发布提示" :bordered="true">
                 <p class="muted">确认 .env 不提交到仓库；README 中只放变量名和示例，不放真实 token。</p>
-                <p class="muted">公开部署时必须设置 FREEBUFF_ADMIN_KEY 和 FREEBUFF_API_KEY。</p>
+                <p class="muted">公开部署时必须设置 FREEBUFF_ADMIN_KEY 和 FREEBUFF_API_KEY（或 FREEBUFF_API_KEYS）。</p>
               </n-card>
             </section>
 
+            <!-- ====== Token Modal ====== -->
             <n-modal v-model:show="tokenModal.show" preset="card" :title="tokenModal.mode === 'add' ? '添加 Freebuff Token' : '修改 Freebuff Token'" style="width: min(640px, 92vw)">
               <n-alert v-if="tokenModal.mode === 'add'" type="info" style="margin-bottom: 16px;">
                 已打开 Token 获取页面。完成认证后复制 token，回到这里粘贴并保存。也可以手动打开：
@@ -548,6 +639,25 @@
                 <n-space>
                   <n-button type="primary" :loading="loading.tokens" @click="saveTokenModal">保存并生效</n-button>
                   <n-button secondary :disabled="!tokenModal.token" :loading="loading.verify === 0" @click="verifyTokenValue(tokenModal.token)">验证当前输入</n-button>
+                </n-space>
+              </n-form>
+            </n-modal>
+
+            <!-- ====== API Key Modal ====== -->
+            <n-modal v-model:show="apiKeyModal.show" preset="card" :title="apiKeyModal.mode === 'add' ? '添加 API Key' : '编辑 API Key'" style="width: min(640px, 92vw)">
+              <n-form>
+                <n-form-item label="名称" required>
+                  <n-input v-model:value="apiKeyModal.name" placeholder="如 default, free-only" :disabled="apiKeyModal.mode === 'edit'" />
+                </n-form-item>
+                <n-form-item label="Key 值" :required="apiKeyModal.mode === 'add'">
+                  <n-input v-model:value="apiKeyModal.key" type="password" show-password-on="click" placeholder="至少 8 位（编辑时留空表示不修改）" />
+                </n-form-item>
+                <n-form-item label="允许模型">
+                  <n-select v-model:value="apiKeyModal.allowed_models" :options="apiKeyModelOptions" multiple filterable placeholder="选模型，留空表示全部" />
+                </n-form-item>
+                <n-space>
+                  <n-button type="primary" :loading="loading.apiKeys" @click="saveApiKeyModal">保存</n-button>
+                  <n-button secondary @click="apiKeyModal.show = false">取消</n-button>
                 </n-space>
               </n-form>
             </n-modal>
@@ -603,26 +713,35 @@
         const tokenModal = reactive({ show: false, mode: 'add', index: null, token: '' });
         const apiKeyForm = reactive({ api_key: '' });
         const security = reactive({ admin_key: '' });
+
+        // --- Request records ---
+        const reqRecords = ref([]);
+        const reqStats = reactive({});
+        const reqLimit = ref(100);
+        const reqFilter = reactive({ status: '', model: '' });
+        const reqStatusOptions = [
+          { label: '全部', value: '' },
+          { label: '成功', value: 'success' },
+          { label: '失败', value: 'error' }
+        ];
+        const reqModelOptions = ref([]);
+
+        // --- API Keys ---
+        const apiKeys = reactive({ items: [], count: 0, active_count: 0 });
+        const apiKeyModal = reactive({ show: false, mode: 'add', name: '', key: '', allowed_models: [] });
+        const apiKeyModelOptions = ref([]);
+
         const loading = reactive({
-          login: false,
-          page: false,
-          tokens: false,
-          tokenRead: null,
-          tokenDelete: null,
-          verify: null,
-          logs: false,
-          models: false,
-          test: false,
-          apiKey: false,
-          env: false,
-          network: false,
-          security: false
+          login: false, page: false, tokens: false, tokenRead: null, tokenDelete: null,
+          verify: null, logs: false, models: false, test: false, apiKey: false,
+          env: false, network: false, security: false, requests: false, apiKeys: false
         });
 
         const nav = [
-          { key: 'overview', label: '概览', subtitle: '服务状态、账号池和当前配置' },
+          { key: 'overview', label: '概览', subtitle: '服务状态、账号池和使用统计' },
+          { key: 'requests', label: '请求记录', subtitle: 'API 调用历史、耗时和 Token 统计' },
           { key: 'tokens', label: 'Token', subtitle: '新增、验证并立即应用 Freebuff Token' },
-          { key: 'apiKey', label: 'API Key', subtitle: '单独管理外部调用接口使用的访问密钥' },
+          { key: 'apiKeys', label: 'API Key', subtitle: '管理多个访问密钥和模型权限' },
           { key: 'env', label: 'Env', subtitle: '查看本地 .env 内容和部署环境提示' },
           { key: 'network', label: '网络', subtitle: '检测当前服务器公网地区、代理和上游连通性' },
           { key: 'logs', label: '日志', subtitle: '查看当前实例内存中的运行日志' },
@@ -682,6 +801,113 @@
           assign(config, configRes.data);
         }
 
+        // --- Request Records ---
+        async function loadRequests(showToast = false) {
+          loading.requests = true;
+          try {
+            const qs = new URLSearchParams({ limit: String(reqLimit.value) });
+            if (reqFilter.status.value || reqFilter.status) qs.set('status', reqFilter.status.value !== undefined ? reqFilter.status.value : reqFilter.status);
+            if (reqFilter.model.value || reqFilter.model) qs.set('model', reqFilter.model.value !== undefined ? reqFilter.model.value : reqFilter.model);
+            const [recRes, statsRes] = await Promise.all([
+              api(`/admin/api/requests?${qs.toString()}`),
+              api('/admin/api/requests/stats')
+            ]);
+            reqRecords.value = recRes.data.items || [];
+            assign(reqStats, statsRes.data);
+            reqModelOptions.value = Object.keys(reqStats.by_model || {}).map(m => ({ label: m, value: m }));
+            if (showToast) message.success('请求记录已刷新');
+          } catch (error) {
+            if (showToast) message.error(normalizeError(error));
+          } finally {
+            loading.requests = false;
+          }
+        }
+
+        async function clearRequests() {
+          try {
+            await api('/admin/api/requests', { method: 'DELETE' });
+            reqRecords.value = [];
+            assign(reqStats, {});
+            message.success('请求记录已清空');
+          } catch (error) {
+            message.error(normalizeError(error));
+          }
+        }
+
+        // --- API Keys ---
+        async function loadApiKeys(showToast = false) {
+          loading.apiKeys = true;
+          try {
+            const res = await api('/admin/api/api-keys');
+            assign(apiKeys, res.data);
+            apiKeyModelOptions.value = modelOptions.value.map(m => ({ label: m.value, value: m.value }));
+            if (showToast) message.success('API Keys 已刷新');
+          } catch (error) {
+            if (showToast) message.error(normalizeError(error));
+          } finally {
+            loading.apiKeys = false;
+          }
+        }
+
+        function openApiKeyModal(mode, existing = null) {
+          apiKeyModal.show = true;
+          apiKeyModal.mode = mode;
+          if (mode === 'add') {
+            apiKeyModal.name = '';
+            apiKeyModal.key = '';
+            apiKeyModal.allowed_models = [];
+          } else if (existing) {
+            apiKeyModal.name = existing.name;
+            apiKeyModal.key = '';
+            apiKeyModal.allowed_models = existing.allowed_models || [];
+          }
+        }
+
+        async function saveApiKeyModal() {
+          loading.apiKeys = true;
+          try {
+            const body = { allowed_models: apiKeyModal.allowed_models };
+            if (apiKeyModal.key) body.key = apiKeyModal.key;
+            if (apiKeyModal.mode === 'add') {
+              body.name = apiKeyModal.name;
+              if (!body.key) throw new Error('Key 不能为空');
+              await api('/admin/api/api-keys', { method: 'POST', body: JSON.stringify(body) });
+            } else {
+              if (body.key) body.key = body.key;
+              await api(`/admin/api/api-keys/${encodeURIComponent(apiKeyModal.name)}`, { method: 'PUT', body: JSON.stringify(body) });
+            }
+            apiKeyModal.show = false;
+            message.success('API Key 已保存');
+            await loadApiKeys();
+            await loadOverview();
+          } catch (error) {
+            message.error(normalizeError(error));
+          } finally {
+            loading.apiKeys = false;
+          }
+        }
+
+        async function toggleApiKey(name) {
+          try {
+            await api(`/admin/api/api-keys/${encodeURIComponent(name)}/toggle`, { method: 'PUT' });
+            await loadApiKeys();
+          } catch (error) {
+            message.error(normalizeError(error));
+          }
+        }
+
+        async function deleteApiKey(name) {
+          try {
+            await api(`/admin/api/api-keys/${encodeURIComponent(name)}`, { method: 'DELETE' });
+            message.success('API Key 已删除');
+            await loadApiKeys();
+            await loadOverview();
+          } catch (error) {
+            message.error(normalizeError(error));
+          }
+        }
+
+        // --- Logs ---
         async function loadLogs(showToast = false, silent = false) {
           if (loading.logs) return;
           if (!silent) loading.logs = true;
@@ -699,19 +925,14 @@
         }
 
         function stopLogAutoRefresh() {
-          if (logTimer.value) {
-            clearInterval(logTimer.value);
-            logTimer.value = null;
-          }
+          if (logTimer.value) { clearInterval(logTimer.value); logTimer.value = null; }
         }
 
         function syncLogAutoRefresh() {
           stopLogAutoRefresh();
           if (!authed.value || tab.value !== 'logs' || !logAutoRefresh.value) return;
           loadLogs(false, true);
-          logTimer.value = setInterval(() => {
-            loadLogs(false, true);
-          }, logRefreshSeconds.value * 1000);
+          logTimer.value = setInterval(() => loadLogs(false, true), logRefreshSeconds.value * 1000);
         }
 
         async function refreshAll() {
@@ -722,6 +943,8 @@
             await loadModels(false);
             await loadEnv(false);
             await loadNetwork(false);
+            await loadRequests(false);
+            await loadApiKeys(false);
           } catch (error) {
             if (String(error.message || '').includes('401')) authed.value = false;
           } finally {
@@ -742,6 +965,7 @@
           }
         }
 
+        // --- Token functions ---
         function openTokenModal(mode, index = null) {
           tokenModal.show = true;
           tokenModal.mode = mode;
@@ -762,9 +986,7 @@
           } catch (error) {
             tokenModal.show = false;
             message.error(normalizeError(error));
-          } finally {
-            loading.tokenRead = null;
-          }
+          } finally { loading.tokenRead = null; }
         }
 
         async function saveTokenModal() {
@@ -783,9 +1005,7 @@
             await refreshAll();
           } catch (error) {
             message.error(normalizeError(error));
-          } finally {
-            loading.tokens = false;
-          }
+          } finally { loading.tokens = false; }
         }
 
         async function deleteToken(index) {
@@ -798,9 +1018,7 @@
             await refreshAll();
           } catch (error) {
             message.error(normalizeError(error));
-          } finally {
-            loading.tokenDelete = null;
-          }
+          } finally { loading.tokenDelete = null; }
         }
 
         async function verifyTokenValue(token, marker = 0) {
@@ -808,11 +1026,7 @@
           try {
             const res = await api('/admin/api/freebuff-tokens/verify', { method: 'POST', body: JSON.stringify({ token }) });
             res.data.ok ? message.success(res.data.info) : message.warning(res.data.info);
-          } catch (error) {
-            message.error(normalizeError(error));
-          } finally {
-            loading.verify = null;
-          }
+          } catch (error) { message.error(normalizeError(error)); } finally { loading.verify = null; }
         }
 
         async function verifySavedToken(index) {
@@ -821,11 +1035,7 @@
             const tokenRes = await api(`/admin/api/freebuff-tokens/${index}`);
             const res = await api('/admin/api/freebuff-tokens/verify', { method: 'POST', body: JSON.stringify({ token: tokenRes.data.token }) });
             res.data.ok ? message.success(res.data.info) : message.warning(res.data.info);
-          } catch (error) {
-            message.error(normalizeError(error));
-          } finally {
-            loading.verify = null;
-          }
+          } catch (error) { message.error(normalizeError(error)); } finally { loading.verify = null; }
         }
 
         async function loadModels(showToast = false) {
@@ -834,39 +1044,22 @@
             const res = await api('/admin/api/models');
             const models = (res.data && res.data.data) || [];
             modelOptions.value = models.map(item => ({ label: item.id, value: item.id }));
+            apiKeyModelOptions.value = modelOptions.value.map(m => ({ label: m.value, value: m.value }));
             if (!testForm.model && modelOptions.value.length) testForm.model = modelOptions.value[0].value;
             if (showToast) message.success('模型列表已刷新');
-          } catch (error) {
-            message.error(normalizeError(error));
-          } finally {
-            loading.models = false;
-          }
+          } catch (error) { message.error(normalizeError(error)); } finally { loading.models = false; }
         }
 
         async function loadEnv(showToast = false) {
           loading.env = true;
-          try {
-            const res = await api('/admin/api/env');
-            assign(envInfo, res.data);
-            if (showToast) message.success('Env 已刷新');
-          } catch (error) {
-            message.error(normalizeError(error));
-          } finally {
-            loading.env = false;
-          }
+          try { const res = await api('/admin/api/env'); assign(envInfo, res.data); if (showToast) message.success('Env 已刷新'); }
+          catch (error) { message.error(normalizeError(error)); } finally { loading.env = false; }
         }
 
         async function loadNetwork(showToast = false) {
           loading.network = true;
-          try {
-            const res = await api('/admin/api/network');
-            assign(networkInfo, res.data);
-            if (showToast) message.success('网络环境已刷新');
-          } catch (error) {
-            if (showToast) message.error(normalizeError(error));
-          } finally {
-            loading.network = false;
-          }
+          try { const res = await api('/admin/api/network'); assign(networkInfo, res.data); if (showToast) message.success('网络环境已刷新'); }
+          catch (error) { if (showToast) message.error(normalizeError(error)); } finally { loading.network = false; }
         }
 
         async function runChatTest() {
@@ -875,11 +1068,7 @@
           try {
             const res = await api('/admin/api/chat-test', { method: 'POST', body: JSON.stringify(testForm) });
             testResult.value = JSON.stringify(res.data, null, 2);
-          } catch (error) {
-            testResult.value = normalizeError(error);
-          } finally {
-            loading.test = false;
-          }
+          } catch (error) { testResult.value = normalizeError(error); } finally { loading.test = false; }
         }
 
         async function saveSecurity() {
@@ -887,13 +1076,8 @@
           try {
             await api('/admin/api/security', { method: 'PUT', body: JSON.stringify(security) });
             message.success('已保存，请使用新的 Admin Key 重新登录');
-            authed.value = false;
-            security.admin_key = '';
-          } catch (error) {
-            message.error(normalizeError(error));
-          } finally {
-            loading.security = false;
-          }
+            authed.value = false; security.admin_key = '';
+          } catch (error) { message.error(normalizeError(error)); } finally { loading.security = false; }
         }
 
         async function saveApiKey() {
@@ -903,11 +1087,7 @@
             assign(config, res.data);
             apiKeyForm.api_key = '';
             message.success(res.data.persisted ? 'API Key 已保存' : '当前环境不持久写入，请到 Vercel 配置环境变量');
-          } catch (error) {
-            message.error(normalizeError(error));
-          } finally {
-            loading.apiKey = false;
-          }
+          } catch (error) { message.error(normalizeError(error)); } finally { loading.apiKey = false; }
         }
 
         async function copyLogs() {
@@ -931,8 +1111,12 @@
           checkingSession, authed, loginKey, tab, nav, overview, config, logs, logLevel, logLimit,
           logLevels, logAutoRefresh, logRefreshSeconds, lastEnv, envInfo, networkInfo, modelOptions, testForm, testResult, tokenHelpUrl, tokenModal,
           apiKeyForm, security, loading, activeTitle, activeSubtitle,
+          reqRecords, reqStats, reqLimit, reqFilter, reqStatusOptions, reqModelOptions,
+          apiKeys, apiKeyModal, apiKeyModelOptions,
           login, logout, refreshAll, loadLogs, loadModels, loadEnv, loadNetwork, syncLogAutoRefresh, openTokenModal,
           saveTokenModal, deleteToken, verifyTokenValue, verifySavedToken,
+          loadRequests, clearRequests,
+          loadApiKeys, openApiKeyModal, saveApiKeyModal, toggleApiKey, deleteApiKey,
           runChatTest, saveSecurity, saveApiKey, copyLogs, copyEnvContent
         };
       }

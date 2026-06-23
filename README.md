@@ -8,6 +8,13 @@ Codebuff Freebuff 的 OpenAI-compatible API 适配服务。部署后可以像调
 
 ### 2026-06-23
 
+- **后台管理全面升级**：新增请求历史记录（时间/模型/耗时/Tokens 表格）、多 API Key 管理（每个 Key 可设名称、密钥、允许的模型）、Key 级模型限制（未授权模型返回 403）。
+- 新增 `FREEBUFF_API_KEYS` 环境变量（JSON 格式），支持配置多个 API Key；旧版 `FREEBUFF_API_KEY` 自动兼容为 "default" key。
+- 新增 `FREEBUFF_MAX_REQUEST_RECORDS` 环境变量，控制内存中最大请求记录数（默认 5000），请求日志自动持久化到 `data/` 目录。
+- 管理面板新增「请求记录」标签页：数据表格、筛选栏、统计卡片；概览页新增实时请求统计。
+- 管理面板「API Key」改造为多 Key 列表管理，支持新增/编辑/删除/启禁用，编辑时可多选允许的模型。
+- 新增 `_record_request` 指标采集，非流和流式路径均自动记录请求耗时和 Token 消耗。
+
 - **新增 Anthropic Messages API 兼容端点 `/v1/messages`**：支持 Claude 格式请求与响应，与现有 `/v1/chat/completions` 并存。
 - 实现 Anthropic 格式 ↔ OpenAI 格式全链路双向转换：消息标准化、`system` 顶层字段、`tool_use`/`tool_result` ↔ `tool_calls`/`tool` 双向映射、`input_schema` ↔ `function.parameters`。
 - 流式/非流式均完整支持。流式输出严格遵循 Anthropic SSE 事件规范：`message_start` → `content_block_start` → `content_block_delta` → `content_block_stop` → `message_delta` → `message_stop`。
@@ -32,8 +39,9 @@ Codebuff Freebuff 的 OpenAI-compatible API 适配服务。部署后可以像调
 - 支持流式和非流式对话，接口路径兼容 `/v1/chat/completions`。
 - 内置 Freebuff / Gemini free agent 模型映射，通过 `/v1/models` 获取模型列表。
 - 支持多个 `FREEBUFF_TOKEN` 账号池，并发请求会优先分配空闲账号。
-- 支持本地 API Key 鉴权，公开部署时可保护 `/v1/*` 接口。
-- 内置 Vue 3 + Naive UI 管理面板，可管理 Token、API Key、Env、日志和模型调用。
+- 支持多 API Key 鉴权，每个 Key 可独立设置允许调用的模型（白名单）；公开部署时可保护 `/v1/*` 接口。
+- 内置 Vue 3 + Naive UI 管理面板，可管理 API Key（多 Key 含模型权限）、Token、请求记录、日志和模型调用。
+- 自动记录所有 API 请求：时间、模型、耗时、Token 消耗、状态，支持筛选和统计。
 - 支持 Vercel 部署；管理面板会明确提示 Vercel 环境变量需要在后台修改并重新部署。
 
 ## 接口
@@ -91,6 +99,8 @@ FREEBUFF_LOG_LEVEL=INFO
 FREEBUFF_LOG_BODY_CHARS=2000
 FREEBUFF_LOG_COLOR=true
 FREEBUFF_ADMIN_LOG_LINES=1000
+FREEBUFF_API_KEYS=
+FREEBUFF_MAX_REQUEST_RECORDS=5000
 FREEBUFF_HOST=0.0.0.0
 FREEBUFF_PORT=8000
 FREEBUFF_TIMEZONE=Asia/Shanghai
@@ -297,7 +307,8 @@ FREEBUFF_ADMIN_KEY=管理后台登录密钥
 | 变量名 | 是否必填 | 说明 |
 | --- | --- | --- |
 | `FREEBUFF_TOKEN` | 是 | Freebuff / Codebuff 的上游 token，支持多个 token 用英文逗号分隔。 |
-| `FREEBUFF_API_KEY` | 强烈建议 | 你自己给当前 API 服务设置的访问密钥；客户端请求时使用 `Authorization: Bearer <FREEBUFF_API_KEY>`。 |
+| `FREEBUFF_API_KEY` | 强烈建议 | 你自己给当前 API 服务设置的访问密钥（单 Key 兼容模式）；多 Key 建议用 `FREEBUFF_API_KEYS`。 |
+| `FREEBUFF_API_KEYS` | 推荐 | JSON 数组格式的多 API Key 配置，每个 Key 可设置名称、密钥、允许调用的模型白名单。例：`[{"name":"default","key":"sk-xxx","allowed_models":["*"],"enabled":true}]` |
 | `FREEBUFF_ADMIN_KEY` | 强烈建议 | 管理后台 `/admin` 的登录密钥；建议和 `FREEBUFF_API_KEY` 使用不同的值。 |
 | `FREEBUFF_API_BASE_URL` | 否 | Codebuff 上游地址，默认 `https://www.codebuff.com`。 |
 | `FREEBUFF_AD_PROVIDERS` | 否 | 广告链提供方，默认 `gravity,zeroclick`。 |
@@ -306,6 +317,7 @@ FREEBUFF_ADMIN_KEY=管理后台登录密钥
 | `FREEBUFF_DEBUG` | 否 | 是否开启调试日志；排查问题时可临时改为 `true`。 |
 | `FREEBUFF_LOG_LEVEL` | 否 | 日志等级，默认 `INFO`。 |
 | `FREEBUFF_ADMIN_LOG_LINES` | 否 | 管理面板内存日志保留行数，默认 `1000`。 |
+| `FREEBUFF_MAX_REQUEST_RECORDS` | 否 | 内存中最大 API 请求记录数，默认 `5000`。 |
 | `FREEBUFF_TIMEZONE` | 否 | 上游请求使用的时区标识，默认 `Asia/Shanghai`。 |
 | `FREEBUFF_LOCALE` | 否 | 上游请求使用的语言区域，默认 `zh-CN`。 |
 | `FREEBUFF_OS` | 否 | 上游请求模拟的系统类型，默认 `windows`。 |
