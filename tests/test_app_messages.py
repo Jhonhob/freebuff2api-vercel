@@ -94,7 +94,7 @@ class AnthropicMessagesEndpointTests(unittest.TestCase):
         # Should not be a 400 (model not found).
         self.assertNotEqual(response.status_code, 400)
 
-    def test_messages_endpoint_accepts_anthropic_alias_model(self) -> None:
+    def test_messages_endpoint_rejects_unknown_model(self) -> None:
         with patch.dict(
             "os.environ",
             {
@@ -114,8 +114,8 @@ class AnthropicMessagesEndpointTests(unittest.TestCase):
                     headers={"x-api-key": "test-key"},
                 )
 
-        # Should not be a 400 (model not found).
-        self.assertNotEqual(response.status_code, 400)
+        # Should be 400 — unknown model (aliases removed).
+        self.assertEqual(response.status_code, 400)
 
     # ── Validation tests ──────────────────────────────────────────────
 

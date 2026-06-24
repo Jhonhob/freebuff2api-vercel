@@ -57,3 +57,19 @@ PR #3 合并内容（来自 qianze0628/main，4 commits）：
 - .vercel/: Vercel 项目配置文件（含 projectId/orgId，建议后续清理）
 
 回滚方式：git revert cca2de3
+
+## 2026-06-24 - Task: 移除 Anthropic 模型别名映射
+
+### What was done
+删除 models.py 中的 ANTHROPIC_MODEL_ALIASES 别名表和 _resolve_alias 函数，简化 resolve_model 逻辑。Anthropic /v1/messages 与 OpenAI /v1/chat/completions 统一只认原生模型 ID（deepseek/deepseek-v4-flash 等10个），传 Claude 风格名字直接返回 400。
+
+### Testing
+- pytest tests/ 全部 120 个测试通过（test_messages_endpoint_rejects_unknown_model 已同步更新为验证 400）
+- 端到端 5 场景验证：短对话、9 轮多轮、20 轮长对话、system prompt、超长 prompt — 全部 200
+
+### Notes
+改动文件清单：
+- freebuff2api/models.py (修改) — 删除 ANTHROPIC_MODEL_ALIASES 字典和 _resolve_alias 函数，去掉 resolve_model 中的别名分支
+- tests/test_app_messages.py (修改) — test_messages_endpoint_accepts_anthropic_alias_model 重命名为 test_messages_endpoint_rejects_unknown_model，断言改为 assertEqual(400)
+
+回滚方式：git revert 本次 commit

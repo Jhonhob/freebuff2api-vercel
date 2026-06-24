@@ -64,28 +64,6 @@ GEMINI_FREE_MODELS: tuple[FreebuffModel, ...] = (
 
 ALL_MODELS = FREEBUFF_MODELS + GEMINI_FREE_MODELS
 
-# ── Anthropic model aliases ──────────────────────────────────────────
-# Maps Anthropic-style model IDs to Freebuff model IDs.
-# Clients using the /v1/messages endpoint can use either:
-#   1. The native freebuff model id (e.g. "deepseek/deepseek-v4-flash")
-#   2. One of these Anthropic aliases (e.g. "claude-sonnet-4-20250514")
-ANTHROPIC_MODEL_ALIASES: dict[str, str] = {
-    "claude-sonnet-4-20250514": DEFAULT_MODEL.id,
-    "claude-3.5-sonnet": DEFAULT_MODEL.id,
-    "claude-3-5-sonnet-20241022": DEFAULT_MODEL.id,
-    "claude-3-haiku-20240307": DEFAULT_MODEL.id,
-    "claude-opus-4-20250514": "deepseek/deepseek-v4-pro",
-}
-
-
-def _resolve_alias(requested: str) -> str | None:
-    """Resolve an Anthropic model alias to a native model id.
-
-    Returns the native id if the alias is known, *None* otherwise.
-    """
-    return ANTHROPIC_MODEL_ALIASES.get(requested)
-
-
 def resolve_model(requested: str | None) -> FreebuffModel:
     if not requested:
         return DEFAULT_MODEL
@@ -94,13 +72,6 @@ def resolve_model(requested: str | None) -> FreebuffModel:
     for model in ALL_MODELS:
         if model.id == requested:
             return model
-
-    # Anthropic alias resolution.
-    aliased = _resolve_alias(requested)
-    if aliased is not None:
-        for model in ALL_MODELS:
-            if model.id == aliased:
-                return model
 
     raise ValueError(f"Unsupported Freebuff model: {requested}")
 
