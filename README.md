@@ -6,33 +6,18 @@ Codebuff Freebuff 的 OpenAI-compatible API 适配服务。部署后可以像调
 
 ## 更新日志
 
-### 2026-06-23
-
-- **后台管理全面升级**：新增请求历史记录（时间/模型/耗时/Tokens 表格）、多 API Key 管理（每个 Key 可设名称、密钥、允许的模型）、Key 级模型限制（未授权模型返回 403）。
-- 新增 `FREEBUFF_API_KEYS` 环境变量（JSON 格式），支持配置多个 API Key；旧版 `FREEBUFF_API_KEY` 自动兼容为 "default" key。
-- 新增 `FREEBUFF_MAX_REQUEST_RECORDS` 环境变量，控制内存中最大请求记录数（默认 5000），请求日志自动持久化到 `data/` 目录。
-- 管理面板新增「请求记录」标签页：数据表格、筛选栏、统计卡片；概览页新增实时请求统计。
-- 管理面板「API Key」改造为多 Key 列表管理，支持新增/编辑/删除/启禁用，编辑时可多选允许的模型。
-- 新增 `_record_request` 指标采集，非流和流式路径均自动记录请求耗时和 Token 消耗。
-
-- **新增 Anthropic Messages API 兼容端点 `/v1/messages`**：支持 Claude 格式请求与响应，与现有 `/v1/chat/completions` 并存。
-- 实现 Anthropic 格式 ↔ OpenAI 格式全链路双向转换：消息标准化、`system` 顶层字段、`tool_use`/`tool_result` ↔ `tool_calls`/`tool` 双向映射、`input_schema` ↔ `function.parameters`。
-- 流式/非流式均完整支持。流式输出严格遵循 Anthropic SSE 事件规范：`message_start` → `content_block_start` → `content_block_delta` → `content_block_stop` → `message_delta` → `message_stop`。
-- Anthropic 鉴权使用 `x-api-key` header（与 OpenAI 的 `Authorization: Bearer` 并行），共用同一把 `FREEBUFF_API_KEY`。
-- 新增 Anthropic 模型别名：`claude-sonnet-4-20250514`、`claude-3.5-sonnet` 等自动映射到 Freebuff 模型。
-- 新增 `FREEBUFF_SYSTEM_PROMPT_OVERRIDE` 环境变量，可自定义或关闭上游系统提示注入。
-- 新增 `top_k` 参数支持（上游透传）；流式长连接每 15 s 发送 `event: ping` 心跳保活。
-- 新增 53 个测试用例（`tests/test_anthropic_compat.py` + `tests/test_app_messages.py`），回归全部 120 测试通过。
-
 ### 2026-06-24
 
-- **Claude Code 兼容性修复**：非流式响应新增空 content 守卫（上游 token 全用于 reasoning 时，避免 Claude Code 拒绝空 content）；响应 model 字段保留客户端请求的模型名，不再被上游 chunk 覆盖。
-- **reasoning_content 往返保留**：Anthropic `thinking` 类型内容块转换为 OpenAI `reasoning_content`，确保 DeepSeek 等模型的推理内容在 Anthropic ↔ OpenAI 双向转换中不丢失。
-- **SSE 流式 text block index 修复**：修复 text block 索引冲突（之前硬编码 index=0，导致 tool_use 与 text 块交错时 Anthropic index 重复）。text block 现在动态分配 index。
-- **`/v1/messages` 端点错误响应 Anthropic 化**：所有验证错误（messages 缺失、max_tokens 缺失、无效模型、上游异常）统一返回 `{"type": "error", "error": {...}}` 格式，符合 Anthropic API 规范。
-- **`/v1/chat/completions` 端点 403 错误修正**：修复 OpenAI 端点错误返回了 Anthropic 格式的 403 响应，恢复为标准 OpenAI 错误格式。
-- 新增 `/api/keep-warm` 端点，用于 Vercel cron 保活。
-- 回归全部 120 测试通过。
+- **Claude Code 兼容性修复**：空 content 守卫、响应 model 名保留、SSE text block index 动态分配、thinking 块 → reasoning_content 往返保留。
+- **`/v1/messages` 错误响应 Anthropic 化**：验证错误统一返回 `{"type": "error", "error": {...}}` 格式。
+- **`/v1/chat/completions` 403 错误修正**：恢复为标准 OpenAI 错误格式。
+- 新增 `/api/keep-warm` 端点。120 测试通过。
+
+### 2026-06-23
+
+- **后台管理升级**：请求历史记录、多 API Key 管理（含模型白名单）、实时统计。
+- **新增 `/v1/messages` Anthropic 端点**：Anthropic ↔ OpenAI 双向格式转换、流式/非流式、SSE 事件规范、模型别名映射。
+- 新增 `FREEBUFF_SYSTEM_PROMPT_OVERRIDE`、`top_k` 参数、ping 心跳。120 测试通过。
 
 ### 2026-06-10
 
