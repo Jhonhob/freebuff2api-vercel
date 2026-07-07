@@ -92,6 +92,49 @@ def normalize_chat_messages(
                 "cache_control": {"type": "ephemeral"},
             },
         )
+
+    # Fix orphan tool_calls: if an assistant message has tool_calls but no
+    # following tool messages respond to them, strip tool_calls to avoid
+    # upstream 400 "insufficient tool messages". Also drop orphan tool messages
+    # that reference tool_call_ids not present in any assistant message.
+    assistant_tool_call_ids: set[str] = set()
+    for msg in normalized:
+        if msg.get("role") == "assistant" and msg.get("tool_calls"):
+            for tc in msg["tool_calls"]:
+                if tc.get("id"):
+                    assistant_tool_call_ids.add(tc["id"])
+
+    tool_msg_ids: set[str] = set()
+    for msg in normalized:
+        if msg.get("role") == "tool" and msg.get("tool_call_id"):
+            tool_msg_ids.add(msg["tool_call_id"])
+
+    # Drop orphan tool messages (no matching assistant tool_call_id)
+    normalized = [
+        msg for msg in normalized
+        if not (msg.get("role") == "tool" and msg.get("tool_call_id")
+                and msg["tool_call_id"] not in assistant_tool_call_ids)
+    ]
+
+    # Strip orphan tool_calls from assistant messages (no matching tool response)
+    for msg in normalized:
+        if msg.get("role") == "assistant" and msg.get("tool_calls"):
+            responded_ids = {
+                tc["id"] for tc in msg["tool_calls"]
+                if tc.get("id") in tool_msg_ids
+            }
+            if len(responded_ids) < len(msg["tool_calls"]):
+                if responded_ids:
+                    msg["tool_calls"] = [
+                        tc for tc in msg["tool_calls"]
+                        if tc.get("id") in responded_ids
+                    ]
+                else:
+                    del msg["tool_calls"]
+                    # Remove empty function_call hints some models add
+                    if "function_call" in msg and not msg["function_call"]:
+                        del msg["function_call"]
+
     return normalized
 
 

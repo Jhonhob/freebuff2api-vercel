@@ -29,8 +29,8 @@ class Settings:
     zeroclick_base_url: str = "https://zeroclick.dev"
     session_id: str = ""
     client_id: str = ""
-    ad_providers: tuple[str, ...] = ("gravity", "zeroclick")
-    request_timeout: float = 60.0
+    ad_providers: tuple[str, ...] = ("gravity", "carbon")
+    request_timeout: float = 120.0
     debug: bool = False
     log_level: str = "INFO"
     log_body_chars: int = 2000
@@ -110,7 +110,7 @@ def load_settings() -> Settings:
         zeroclick_base_url=os.getenv("ZEROCLICK_BASE_URL", "https://zeroclick.dev"),
         session_id=os.getenv("FREEBUFF_SESSION_ID", str(uuid.uuid4())),
         client_id=os.getenv("FREEBUFF_CLIENT_ID", uuid.uuid4().hex[:11]),
-        ad_providers=_csv("FREEBUFF_AD_PROVIDERS", "gravity,zeroclick"),
+        ad_providers=_csv("FREEBUFF_AD_PROVIDERS", "gravity,carbon"),
         request_timeout=float(os.getenv("FREEBUFF_TIMEOUT", "60")),
         debug=debug,
         log_level=log_level,
