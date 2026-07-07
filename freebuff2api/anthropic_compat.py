@@ -371,6 +371,22 @@ def build_anthropic_upstream_payload(
     # in messages causes upstream 400 "insufficient tool messages".
     # openai_tools and tool_choice are intentionally NOT added to payload.
 
+    # Final safety net: strip any tool-related keys that might have
+    # leaked through from the original request body.
+    payload.pop("tools", None)
+    payload.pop("tool_choice", None)
+    payload.pop("parallel_tool_calls", None)
+
+    # Debug: verify no tool_calls remain in messages.
+    import logging as _log
+    _l = _log.getLogger(__name__)
+    _msg_roles = [m.get("role", "?") for m in messages]
+    _msg_tc = [i for i, m in enumerate(messages) if m.get("role") == "assistant" and m.get("tool_calls")]
+    _l.warning(
+        "build_anthropic_payload: msg_roles=%s has_tc_idx=%s payload_keys=%s",
+        _msg_roles, _msg_tc, sorted(payload.keys()),
+    )
+
     # Metadata.
     payload["provider"] = {"data_collection": "deny"}
     payload["codebuff_metadata"] = {

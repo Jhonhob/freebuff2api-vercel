@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import logging
 import time
 import uuid
 from typing import Any
 
 from .codebuff import FreebuffSession
 from .models import resolve_model
+
+logger = logging.getLogger(__name__)
 
 
 _UPSTREAM_CHAT_KEYS = frozenset(
@@ -102,6 +105,14 @@ def normalize_chat_messages(
             msg.pop("tool_calls", None)
             msg.pop("function_call", None)
 
+    # Debug: log message roles after tool stripping.
+    _roles = [m.get("role", "?") for m in normalized]
+    _has_tc = any("tool_calls" in m for m in normalized if m.get("role") == "assistant")
+    logger.debug(
+        "normalize_chat_messages: roles=%s has_tool_calls=%s",
+        _roles, _has_tc,
+    )
+
     return normalized
 
 
@@ -126,6 +137,11 @@ def build_upstream_payload(
     )
     payload["stream"] = True
     payload.setdefault("stop", ['"cb_easp"'])
+
+    # Final safety net: strip any tool-related keys.
+    payload.pop("tools", None)
+    payload.pop("tool_choice", None)
+    payload.pop("parallel_tool_calls", None)
 
     payload["provider"] = {"data_collection": "deny"}
     payload["codebuff_metadata"] = {
