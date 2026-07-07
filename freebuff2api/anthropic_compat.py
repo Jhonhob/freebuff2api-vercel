@@ -20,14 +20,12 @@ _ANTHROPIC_UPSTREAM_KEYS = frozenset(
         "max_tokens",
         "metadata",
         "modalities",
-        "parallel_tool_calls",
         "presence_penalty",
         "reasoning_effort",
         "seed",
         "service_tier",
         "stream_options",
         "temperature",
-        "tool_choice",
         "top_logprobs",
         "top_p",
         "top_k",
@@ -368,14 +366,10 @@ def build_anthropic_upstream_payload(
     elif "top_k" in body and body["top_k"] is not None:
         payload["top_k"] = body["top_k"]
 
-    # Map tools.
-    if openai_tools:
-        payload["tools"] = openai_tools
-
-    # Map tool_choice.
-    tc = anthropic_tool_choice_to_openai(body.get("tool_choice"))
-    if tc is not None:
-        payload["tool_choice"] = tc
+    # Strip tools/tool_choice: freebuff/codebuff handles tool calls
+    # internally. Forwarding tools definitions without matching tool_calls
+    # in messages causes upstream 400 "insufficient tool messages".
+    # openai_tools and tool_choice are intentionally NOT added to payload.
 
     # Metadata.
     payload["provider"] = {"data_collection": "deny"}
